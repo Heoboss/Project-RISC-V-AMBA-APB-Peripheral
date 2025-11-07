@@ -60,10 +60,11 @@ APB Bus에 Slave로 연결되는 UART 모듈을 설계했습니다. CPU(Master)�
 ### **UART 레지스터 맵**
 <img width="1556" height="324" alt="image" src="https://github.com/user-attachments/assets/c9e4f8ca-8887-4621-b5bf-0dc1ab85d7a3" />
 
+---
 
 ## ✨ 주요 기능 및 검증
 
-1. Multi-Cycle CPU 명령어 검증
+### 1. Multi-Cycle CPU 명령어 검증
 - R-Type: `add`, `sub`, `sll`, `srl`, `sra`, `slt`, `sltu`, `xor`, `or`, `and`
 - I-Type: `addi`, `slti`, `sltiu`, `xori`, `ori`, `andi`, `slli`, `srli`, `srai`
 - Load (I): `lw`, `lb`, `lh`, `lbu`, `lhu` (Sign/Zero Extension 검증)
@@ -73,62 +74,41 @@ APB Bus에 Slave로 연결되는 UART 모듈을 설계했습니다. CPU(Master)�
 
 Vivado 시뮬레이션을 통해 Multi-Cycle 구조에서 각 명령어 타입이 정확한 단계(Cycle)를 거쳐 실행되고, 레지스터 파일과 데이터 메모리에 올바른 결과가 저장됨을 확인했습니다.
 
-2. UART Peripheral 검증 (Loopback Test)
-
+### 2. UART Peripheral 검증 (Loopback Test)
 SystemVerilog Class 기반 Testbench를 작성하여 UART 모듈의 송수신 기능을 검증했습니다.
+- **테스트 시나리오**:
+  - Testbench(PC 역할)가 `0x00`부터 `0xFF`까지의 데이터를 UART `rx` 핀으로 1바이트씩 전송합니다.
+  - Testbench(CPU 역할)가 APB 버스를 통해 UART의 `FSR_RX` 레지스터를 폴링(Polling)하여 수신을 확인합니다.
+  - `FRD` 레지스터에서 수신된 데이터를 읽습니다.
+  - `FSR_TX` 레지스터를 폴링하여 송신 FIFO가 비어있는지 확인합니다.
+  - `FWD` 레지스터에 읽은 데이터를 그대로 다시 씁니다.
+  - Monitor가 UART `tx` 핀으로 해당 데이터가 동일하게 출력되는지 비교합니다.
+- **검증 결과**: 총 256 바이트의 모든 데이터 케이스에 대해 **PASS (100% Coverage)** 함을 확인했습니다.
 
-테스트 시나리오:
-
-Testbench(PC 역할)가 0x00부터 0xFF까지의 데이터를 UART rx 핀으로 1바이트씩 전송합니다.
-
-Testbench(CPU 역할)가 APB 버스를 통해 UART의 FSR_RX 레지스터를 폴링(Polling)하여 수신을 확인합니다.
-
-FRD 레지스터에서 수신된 데이터를 읽습니다.
-
-FSR_TX 레지스터를 폴링하여 송신 FIFO가 비어있는지 확인합니다.
-
-FWD 레지스터에 읽은 데이터를 그대로 다시 씁니다.
-
-Monitor가 UART tx 핀으로 해당 데이터가 동일하게 출력되는지 비교합니다.
-
-검증 결과: 총 256 바이트의 모든 데이터 케이스에 대해 PASS (100% Coverage) 함을 확인했습니다.
-
-3. C언어 기반 FPGA 동작 검증
-
+### 3. C언어 기반 FPGA 동작 검증
 C언어로 UART 송수신 및 LED 제어 프로그램을 작성하여 실제 FPGA 보드에서 동작을 검증했습니다.
+- PC의 터미널 프로그램에서 'R' 또는 'L' 커맨드를 입력받습니다.
+- CPU는 UART로 커맨드를 수신하여 LED의 쉬프트 방향을 제어합니다.
+- 동시에 현재 LED의 쉬프트 방향("left", "right")을 주기적으로 PC에 UART로 전송합니다.
+- Reset 입력 시 "System Start" 문자열을 PC로 전송합니다.
 
-PC의 터미널 프로그램에서 'R' 또는 'L' 커맨드를 입력받습니다.
+---
 
-CPU는 UART로 커맨드를 수신하여 LED의 쉬프트 방향을 제어합니다.
-
-동시에 현재 LED의 쉬프트 방향("left", "right")을 주기적으로 PC에 UART로 전송합니다.
-
-Reset 입력 시 "System Start" 문자열을 PC로 전송합니다.
-
-🔧 트러블슈팅
-
+## 🔧 트러블슈팅
 프로젝트 진행 중 발생했던 주요 문제 및 해결 과정은 다음과 같습니다.
+- **UART 송신 데이터 누락**
+  - 문제: "System Start"와 같이 여러 문자를 연속으로 `uart_put_char` 함수로 전송 시, 일부 문자가 누락되는 현상이 발생했습니다.
+  - 원인: CPU가 TX FIFO에 데이터를 PUSH하는 속도(APB Bus 속도)가 UART가 데이터를 POP하여 직렬화하는 속도(Baud Rate)보다 빨랐습니다. `FSR_TX`의 FULL 비트를 확인하는 로직이 있었음에도, FIFO가 채워지는 속도가 더 빨라 데이터가 덮어씌워졌습니다.
+  - 해결: `uart_put_char` 함수 내부에 데이터를 FWD 레지스터에 쓴 직후, 짧은 `delay`를 추가하여 FIFO가 처리할 시간을 확보함으로써 문제를 해결했습니다.
 
-UART 송신 데이터 누락
+- **C언어 문자열 포인터 접근 문제**
+  - 문제: `uart_put_string(char *s)`와 같이 문자열 포인터를 받아 char 단위로 접근하려 했으나, 의도대로 동작하지 않았습니다.
+  - 원인: 설계된 CPU의 Data Memory (RAM)가 `lw`, `sw` 등 Word(32-bit) 단위의 Load/Store만 지원하고, `lb`, `sb`와 같은 Byte 단위 접근을 구현하지 않았기 때문입니다.
+  - 한계: BitStream 생성에 있어서 시간상 제약으로 Byte 단위 Load/Store를 추가 구현하지 못하고, `uart_put_char('S');`, `uart_put_char('y');` ... 와 같이 한 글자씩 하드코딩하는 방식으로 우회했습니다.
 
-문제: "System Start"와 같이 여러 문자를 연속으로 uart_put_char 함수로 전송 시, 일부 문자가 누락되는 현상이 발생했습니다.
+---
 
-원인: CPU가 TX FIFO에 데이터를 PUSH하는 속도(APB Bus 속도)가 UART가 데이터를 POP하여 직렬화하는 속도(Baud Rate)보다 빨랐습니다. FSR_TX의 FULL 비트를 확인하는 로직이 있었음에도, FIFO가 채워지는 속도가 더 빨라 데이터가 덮어씌워졌습니다.
-
-해결: uart_put_char 함수 내부에 데이터를 FWD 레지스터에 쓴 직후, 짧은 delay를 추가하여 FIFO가 처리할 시간을 확보함으로써 문제를 해결했습니다.
-
-C언어 문자열 포인터 접근 문제
-
-문제: uart_put_string(char *s)와 같이 문자열 포인터를 받아 char 단위로 접근하려 했으나, 의도대로 동작하지 않았습니다.
-
-원인: 설계된 CPU의 Data Memory (RAM)가 lw, sw 등 Word(32-bit) 단위의 Load/Store만 지원하고, lb, sb와 같은 Byte 단위 접근을 구현하지 않았기 때문입니다.
-
-한계: 시간상 제약으로 Byte 단위 Load/Store를 추가 구현하지 못하고, uart_put_char('S');, uart_put_char('y'); ... 와 같이 한 글자씩 하드코딩하는 방식으로 우회했습니다.
-
-🤔 고찰
-
-uart_put_char 함수를 여러 번 호출하는 대신, uart_put_string 함수를 구현하여 main 코드를 더 깔끔하게 개선할 수 있었을 것입니다. (Byte 단위 메모리 접근이 선행되어야 함)
-
-APB BUS 기반으로 시스템을 구축하고 UART Peripheral을 연동하면서, 표준화된 버스 인터페이스가 시스템의 확장성과 IP의 재사용성 측면에서 왜 중요한지 체감할 수 있었습니다.
-
-SystemVerilog의 Class와 Task를 이용한 Testbench를 작성하며, 명확한 Naming과 모듈화된 검증 로직이 코드의 가독성과 디버깅 효율을 크게 향상시킨다는 것을 깨달았습니다.
+## 🤔 고찰
+ - `uart_put_char` 함수를 여러 번 호출하는 대신, `uart_put_string` 함수를 구현하여 `main` 코드를 더 깔끔하게 개선할 수 있었을 것입니다. (Byte 단위 메모리 접근이 선행되어야 함)
+ - APB BUS 기반으로 시스템을 구축하고 UART Peripheral을 연동하면서, 표준화된 버스 인터페이스가 시스템의 확장성과 IP의 **재사용성** 측면에서 왜 중요한지 체감할 수 있었습니다.
+- SystemVerilog의 Class와 Task를 이용한 Testbench를 작성하며, 명확한 Naming과 모듈화된 검증 로직이 코드의 가독성과 디버깅 효율을 크게 향상시킨다는 것을 깨달았습니다.
